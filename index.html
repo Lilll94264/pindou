@@ -88,6 +88,9 @@ input[type=range]{width:100%;accent-color:var(--green)}
 .ai-tip{font-size:11px;color:var(--ink2);margin-top:6px;line-height:1.7}
 
 .pal-note{font-size:12px;color:var(--ink2);background:#FFF8E6;border:1px dashed #EAD9AC;border-radius:10px;padding:8px 12px;margin-bottom:4px;line-height:1.8}
+.partial-info{font-size:12px;margin-top:8px;padding:7px 12px;border-radius:10px;line-height:1.6;background:#F4FAEC;color:var(--green-d);font-weight:500;transition:.2s}
+.partial-info.off{background:#F7F3EA;color:var(--ink2);font-weight:400}
+.partial-info.warn{background:#FFF0E8;color:#C0632B}
 .fam-chips{display:flex;gap:6px;flex-wrap:wrap;margin-top:10px}
 .fam-chip{border:1.5px solid var(--line);background:#FFFDF6;border-radius:999px;padding:4px 11px;font-size:12px;transition:.15s}
 .fam-chip.active{background:var(--yellow);border-color:#E8B93C;color:#7A5B12;font-weight:700}
@@ -104,6 +107,7 @@ input[type=range]{width:100%;accent-color:var(--green)}
 .pal-tools{display:flex;gap:8px;margin-top:12px;align-items:center;flex-wrap:wrap}
 .mini-btn{border:1px solid var(--line);background:#FFFDF6;border-radius:999px;padding:4px 12px;font-size:12px}
 .mini-btn:hover{background:#F4FAEC}
+.mini-btn.hot{background:#FFF3D6;border-color:#E8B93C;color:#8A6414;font-weight:700}
 .pal-count{font-size:12px;color:var(--ink2);margin-left:auto}
 
 .btn{border:none;border-radius:999px;padding:11px 18px;font-size:14px;font-weight:500;transition:.15s;display:inline-flex;align-items:center;gap:6px;justify-content:center}
@@ -237,17 +241,19 @@ footer b{color:var(--green-d)}
 
     <section class="card">
       <h2><span class="dot" style="background:var(--pink)"></span>③ 拼豆色板</h2>
-      <div class="pal-note">🎨 已录入 <b>Mard 官方 221 色</b>（9 大色系）<br>🔍 <b>CIE Lab 感知色差（ΔE）</b>匹配 · 渐进式高质量缩放 · AI 区域一致性优化</div>
+      <div class="pal-note">🎨 已录入 <b>Mard 官方 221 色</b>（9 大色系）<br>👆 <b>直接点击色块即可限定配色</b>（会自动开启限定模式）；点击色系标题可整系开关</div>
       <div class="switch-row" style="margin-top:8px">
         <span>只使用勾选的颜色</span>
         <label class="switch"><input type="checkbox" id="partialChk"><i></i></label>
       </div>
+      <div class="partial-info off" id="partialInfo"></div>
       <div class="fam-chips" id="famChips"></div>
       <div id="palGrid"></div>
       <div class="pal-tools">
         <button class="mini-btn" id="palAll">全选</button>
         <button class="mini-btn" id="palNone">清空</button>
         <button class="mini-btn" id="palInvert">反选</button>
+        <button class="mini-btn hot" id="famOnly" hidden>仅保留本色系</button>
         <span class="pal-count" id="palCount"></span>
       </div>
     </section>
@@ -397,6 +403,26 @@ function nearestIdx(L,A,B,list){
 }
 function cellSize(){ return Math.max(6, Math.round(16*state.zoom)); }
 
+/* ================= 限定模式辅助 ================= */
+function setPartial(on){
+  state.usePartial=on;
+  $('#partialChk').checked=on;
+  updatePartialInfo();
+}
+function updatePartialInfo(){
+  const info=$('#partialInfo');
+  if(!state.usePartial){
+    info.className='partial-info off';
+    info.textContent='当前：全部 '+PALETTE.length+' 色参与识别 · 点击任意色块即可开启限定';
+  }else if(state.enabled.size===0){
+    info.className='partial-info warn';
+    info.textContent='⚠ 未勾选任何颜色，暂时仍按全部色板识别';
+  }else{
+    info.className='partial-info';
+    info.textContent='✔ 限定模式已开启：仅 '+state.enabled.size+' / '+PALETTE.length+' 色参与识别';
+  }
+}
+
 /* ================= 图片载入 ================= */
 function imgToCanvas(img){
   const max=1400;
@@ -469,21 +495,13 @@ function applyAdjust(f,n){
   }
 }
 
-/* ================= AI 区域平滑 =================
-   目标：消除大色块中孤立的“跳色”杂点，同时保护真实细节。
-   判定一个格子是否替换为邻域主色，需同时满足：
-   1) 邻域（8 邻格）主色票数 ≥ need（说明身处大色块内部）
-   2) 当前色与主色的 Lab 距离 > T_JUMP（确实是“突变”）
-   3) 用原图该格颜色做保真校验：替换后与原图的偏差
-      不高于替换前（dOrig ≤ dSelf + tol），且不超过上限。
-      ——这样描边/眼睛等真实细节（原图本就与邻居不同）不会被抹掉 */
+/* ================= AI 区域平滑 ================= */
 function aiRegionSmooth(grid, cols, rows, f, strength){
   const T_JUMP=strength>=3?22:28;
   const need=strength===1?7:strength===2?6:5;
   const tol=strength===1?6:strength===2?10:14;
   const FID_MAX=42;
   const iterations=strength;
-  // 预计算每格原图颜色的 Lab
   const origLab=new Array(cols*rows);
   for(let i=0;i<cols*rows;i++) origLab[i]=rgb2lab(f[i*3],f[i*3+1],f[i*3+2]);
   let cur=grid.slice();
@@ -492,7 +510,6 @@ function aiRegionSmooth(grid, cols, rows, f, strength){
     let changed=0;
     for(let y=0;y<rows;y++)for(let x=0;x<cols;x++){
       const i=y*cols+x, mine=cur[i];
-      // 统计邻域主色
       let dom=-1, domCnt=0;
       const cnt=new Map();
       for(let dy=-1;dy<=1;dy++)for(let dx=-1;dx<=1;dx++){
@@ -505,7 +522,7 @@ function aiRegionSmooth(grid, cols, rows, f, strength){
         else if(c===domCnt && dom>=0 && idx!==mine && labDistIdx(idx,mine)<labDistIdx(dom,mine)) dom=idx;
       }
       if(dom===mine || domCnt<need) continue;
-      if(labDistIdx(mine,dom) < T_JUMP) continue;   // 颜色接近，无需处理
+      if(labDistIdx(mine,dom) < T_JUMP) continue;
       const ol=origLab[i];
       const dOrig=labDistLab(ol, PALETTE[dom].L);
       const dSelf=labDistLab(ol, PALETTE[mine].L);
@@ -639,6 +656,12 @@ function renderFamChips(){
   };
   mk('ALL','全部 221');
   for(const f of FAMS) mk(f, f+' '+FAM_LABEL[f]);
+  const famOnly=$('#famOnly');
+  if(palFilter==='ALL'){ famOnly.hidden=true; }
+  else{
+    famOnly.hidden=false;
+    famOnly.textContent='✨ 仅保留 '+palFilter+' '+FAM_LABEL[palFilter];
+  }
 }
 function renderPalette(){
   const g=$('#palGrid'); g.innerHTML='';
@@ -651,6 +674,7 @@ function renderPalette(){
     head.title='点击一键切换整个'+FAM_LABEL[fam];
     head.innerHTML='<b>'+fam+'</b> '+FAM_LABEL[fam]+'<span>'+on+' / '+list.length+'</span>';
     head.onclick=()=>{
+      if(!state.usePartial) setPartial(true);
       if(on===list.length) list.forEach(c=>state.enabled.delete(c.code));
       else list.forEach(c=>state.enabled.add(c.code));
       renderPalette(); scheduleProcess();
@@ -660,18 +684,20 @@ function renderPalette(){
     for(const c of list){
       const b=document.createElement('button');
       b.className='swatch'+(state.enabled.has(c.code)?'':' off');
-      b.style.background=c.hex; b.title=c.code+' '+c.name;
+      b.style.background=c.hex; b.title=c.code+' '+c.name+'（点击切换）';
       b.onclick=()=>{
+        if(!state.usePartial){ setPartial(true); toast('已自动开启「只使用勾选的颜色」'); }
         if(state.enabled.has(c.code)) state.enabled.delete(c.code); else state.enabled.add(c.code);
         b.classList.toggle('off');
-        $('#palCount').textContent='已启用 '+state.enabled.size+' / '+PALETTE.length+' 色';
+        $('#palCount').textContent='已勾选 '+state.enabled.size+' / '+PALETTE.length+' 色';
+        updatePartialInfo();
         scheduleProcess();
       };
       grid.appendChild(b);
     }
     block.appendChild(grid); g.appendChild(block);
   }
-  $('#palCount').textContent='已启用 '+state.enabled.size+' / '+PALETTE.length+' 色';
+  $('#palCount').textContent='已勾选 '+state.enabled.size+' / '+PALETTE.length+' 色';
 }
 
 /* ================= 缩放 ================= */
@@ -820,16 +846,23 @@ document.querySelectorAll('#aiStrengthSeg button').forEach(b=>b.addEventListener
 }));
 $('#partialChk').addEventListener('change',e=>{
   state.usePartial=e.target.checked;
-  $('#palGrid').style.opacity=state.usePartial?1:.45;
-  $('#palGrid').style.pointerEvents=state.usePartial?'auto':'none';
+  updatePartialInfo();
   scheduleProcess();
 });
-$('#palAll').addEventListener('click',()=>{ state.enabled=new Set(PALETTE.map(c=>c.code)); renderPalette(); scheduleProcess(); });
-$('#palNone').addEventListener('click',()=>{ state.enabled=new Set(); renderPalette(); scheduleProcess(); });
+$('#palAll').addEventListener('click',()=>{ state.enabled=new Set(PALETTE.map(c=>c.code)); renderPalette(); updatePartialInfo(); scheduleProcess(); });
+$('#palNone').addEventListener('click',()=>{ state.enabled=new Set(); renderPalette(); updatePartialInfo(); scheduleProcess(); });
 $('#palInvert').addEventListener('click',()=>{
   const inv=new Set();
   for(const c of PALETTE) if(!state.enabled.has(c.code)) inv.add(c.code);
-  state.enabled=inv; renderPalette(); scheduleProcess();
+  state.enabled=inv; renderPalette(); updatePartialInfo(); scheduleProcess();
+});
+$('#famOnly').addEventListener('click',()=>{
+  if(palFilter==='ALL') return;
+  const list=PALETTE.filter(c=>c.fam===palFilter);
+  state.enabled=new Set(list.map(c=>c.code));
+  setPartial(true);
+  renderPalette(); scheduleProcess();
+  toast('已仅保留 '+FAM_LABEL[palFilter]+'（'+list.length+' 色）');
 });
 
 $('#zoomIn').addEventListener('click',()=>zoomBy(1.25));
@@ -864,8 +897,7 @@ let rsTimer=null;
 window.addEventListener('resize',()=>{ clearTimeout(rsTimer); rsTimer=setTimeout(()=>{ renderBeads(); renderOrig(); },150); });
 
 /* ================= 初始化 ================= */
-$('#palGrid').style.opacity=.45; $('#palGrid').style.pointerEvents='none';
-renderFamChips(); renderPalette(); updateZoomLabel();
+renderFamChips(); renderPalette(); updatePartialInfo(); updateZoomLabel();
 </script>
 </body>
 </html>
